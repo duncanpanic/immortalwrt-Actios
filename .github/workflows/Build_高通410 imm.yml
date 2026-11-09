@@ -254,22 +254,35 @@ jobs:
       if: ${{ inputs.ssh || contains(github.event.action, 'ssh') }}
       
       
-    - name: Pin glib2 to pre-2.88.1 (可选，勾选 glib2_pin 才执行)
+    - name: Pin glib2 to 2.82.0 (勾选 glib2_pin 才执行)
       if: ${{ inputs.glib2_pin }}
       run: |
+        OLD=5120ed91b80461524884cd5961af50fc968a6129
         cd openwrt/feeds/packages
-        BAD=$(git log --format='%H %s' -- libs/glib2 | grep -m1 'update to 2.88.1' | cut -d' ' -f1)
-        if [ -n "$BAD" ]; then
-          echo "回退 glib2 到 $BAD 的父提交版本"
-          rm -rf libs/glib2
-          git checkout "$BAD^" -- libs/glib2 2>/dev/null || { git fetch --unshallow || true; git checkout "$BAD^" -- libs/glib2; }
-          grep -m1 'PKG_VERSION:=' libs/glib2/Makefile
-        else
-          echo "::warning::未找到 glib2 2.88.1 的升级提交，跳过回退"
+        # feeds 是 --depth 1 浅克隆，git log 查不到历史，所以直接按 SHA 取
+        if ! git cat-file -e "${OLD}^{commit}" 2>/dev/null; then
+          git fetch --depth 1 origin "$OLD" || git fetch origin "$OLD" || true
         fi
-        cd "$GITHUB_WORKSPACE"
-        # 旧版 glib2 没有拆分子包，清掉 .config 里新名字的符号，避免 defconfig 报未知符号
-        sed -i -E '/CONFIG_PACKAGE_glib2-(core|gobject|gio|gmodule|gthread)/d' openwrt/.config
+        rm -rf libs/glib2
+        if git cat-file -e "${OLD}^{commit}" 2>/dev/null; then
+          git checkout "$OLD" -- libs/glib2
+        else
+          echo "取不到 $OLD，改用 raw 直接下载"
+          base="https://raw.githubusercontent.com/immortalwrt/packages/$OLD/libs/glib2"
+          mkdir -p libs/glib2/patches
+          curl -fsSL "$base/Makefile" -o libs/glib2/Makefile
+          for p in 003-valgrind.h-mips16-fix.patch 006-c99.patch; do
+            curl -fsSL "$base/patches/$p" -o "libs/glib2/patches/$p"
+          done
+        fi
+        if [ -f libs/glib2/Makefile ]; then
+          VER=$(grep -m1 '^PKG_VERSION:=' libs/glib2/Makefile | cut -d= -f2)
+          echo "::notice title=glib2::回退成功，当前版本 ${VER}"
+          grep -m1 '^PKG_VERSION:=' libs/glib2/Makefile
+        else
+          echo "::error::glib2 回退失败，中止编译以免浪费一个多小时"
+          exit 1
+        fi
 
     - name: Config defconfig
       id: config
