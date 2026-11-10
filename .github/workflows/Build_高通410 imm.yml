@@ -180,6 +180,22 @@ jobs:
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
 
+    - name: Restore missing libffi package (上游已把 libffi 从 packages feed 迁到主树，本 fork 主树里没有)
+      run: |
+        git clone --depth 1 --filter=blob:none --sparse https://github.com/immortalwrt/immortalwrt /tmp/imm
+        cd /tmp/imm && git sparse-checkout set package/libs/libffi
+        mkdir -p /mnt/openwrt/package/libs
+        rm -rf /mnt/openwrt/package/libs/libffi
+        cp -r /tmp/imm/package/libs/libffi /mnt/openwrt/package/libs/
+        if [ ! -f /mnt/openwrt/package/libs/libffi/Makefile ]; then
+          echo "::error::libffi 恢复失败，后续 glib2 必然报 libffi 依赖不存在"
+          exit 1
+        fi
+        VER=$(grep -m1 '^PKG_VERSION:=' /mnt/openwrt/package/libs/libffi/Makefile | cut -d= -f2)
+        PAT=$(ls /mnt/openwrt/package/libs/libffi/patches 2>/dev/null | wc -l)
+        echo "::notice title=libffi::已恢复 package/libs/libffi，版本 ${VER}，补丁 ${PAT} 个"
+        ls -l /mnt/openwrt/package/libs/libffi
+
     - name: Remove conflicting packages from smpackage
       run: |
         # 删除 small-package 中与系统冲突的包，避免编译报错（官方推荐操作）
@@ -306,6 +322,14 @@ jobs:
            ls -la openwrt/.config
 
  
+    - name: Check libffi index (诊断，结果会出现在运行页 Annotations)
+      run: |
+        cd openwrt
+        V=$(awk '/^Package: libffi$/{f=1} f&&/^Version:/{print $2; exit}' tmp/.packageinfo 2>/dev/null)
+        echo "::notice title=libffi index::版本=${V:-MISSING}"
+        F=$(ls build_dir/hostpkg/bin/../lib/libffi* 2>/dev/null | head -3 | tr '\n' ' ')
+        echo "::notice title=host libffi::${F:-none}"
+
     - name: 自动上传最新源码生成.config编译配置
       uses: actions/upload-artifact@main
       with:
